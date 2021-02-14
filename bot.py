@@ -626,17 +626,17 @@ def get_scheduled_messages(update: Update, context: CallbackContext):
             + "in this chat below.\n\nThanks and regards,\nGoodMorningBot"
         )
         for job in jobs:
-            message = f"Schedule ID: {job.name}\n"
-            message += f"Created by: {job.context[CREATOR]}\n"
-            message += f"Greeting: {job.context[MESSAGE]}\n"
-            message += f"Interval: {job.context[INTERVAL]}\n"
-            message += f"Start: {job.context[FIRST]}\n"
-            message += f"End: {job.context[LAST] if job.context[LAST] is not None else 'The end of time'}\n\n"
-            message += "_Reply to this with *'cancel'* in the next 15 seconds to cancel this schedule._"
+            message = f"<b>Schedule ID:</b> {job.name}\n"
+            message += f"<b>Created by:</b> {job.context[CREATOR]}\n"
+            message += f"<b>Greeting:</b> {job.context[MESSAGE]}\n"
+            message += f"<b>Interval:</b> {job.context[INTERVAL]}\n"
+            message += f"<b>Start:</b> {job.context[FIRST]}\n"
+            message += f"<b>End:</b> {job.context[LAST] if job.context[LAST] is not None else 'The end of time'}\n\n"
+            message += "<i>Reply to this with <code>cancel</code> in the next 15 seconds to cancel this schedule.</i>"
             context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text=message,
-                parse_mode="markdown",
+                parse_mode="HTML",
             )
         return 1
     else:
