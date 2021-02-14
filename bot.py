@@ -4,13 +4,21 @@ import os
 import random
 import re
 import textwrap
+import time
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
-from typing import List, NamedTuple, Tuple
+from typing import Callable, List, NamedTuple, Tuple
 
 import dotenv
 import requests
 from PIL import Image, ImageDraw, ImageFont
-from telegram.ext import CommandHandler, Updater
+from telegram.ext import (
+    CommandHandler,
+    ConversationHandler,
+    Filters,
+    MessageHandler,
+    Updater,
+)
 from telegram.ext.callbackcontext import CallbackContext
 from telegram.update import Update
 
@@ -21,6 +29,7 @@ from telegram.update import Update
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
+logger = logging.getLogger()
 
 dotenv.load_dotenv()
 
@@ -50,12 +59,16 @@ BLACKLISTED_REGEXES: List[RegexInfo] = [
     RegexInfo(r"\bm[ey]\b", re.IGNORECASE),
 ]
 
+IST = timezone(timedelta(hours=5, minutes=30))
+
+updater = Updater(token=TELEGRAM_TOKEN)
+job_queue = updater.job_queue
+dispatcher = updater.dispatcher
+
+
 # ---------------------------------------------------------------------------- #
 #                                 Greet command                                #
 # ---------------------------------------------------------------------------- #
-
-updater = Updater(token=TELEGRAM_TOKEN)
-dispatcher = updater.dispatcher
 
 
 def greet(update: Update, context: CallbackContext):
@@ -66,14 +79,27 @@ def greet(update: Update, context: CallbackContext):
         update (Update): Update from telegram
         context (CallbackContext): CallbackContext for the update
     """
-    quote = get_random_quote()
-    message = ""
-    if context.args is not None:
-        message = " ".join(context.args)
-    if message.strip() == "":
-        message = "Good Morning!"
-    image = make_greeting(quote.strip(), message.strip())
-    context.bot.send_photo(chat_id=update.effective_chat.id, photo=image)
+    greeting_made = False
+    retries = 0
+    while not greeting_made and retries <= 3:
+        try:
+            quote = get_random_quote()
+            message = ""
+            if context.args is not None:
+                message = " ".join(context.args)
+            if message.strip() == "":
+                message = "Good Morning!"
+            image = make_greeting(quote.strip(), message.strip())
+            greeting_made = True
+        except:
+            print("Oops! Something bad happened. Retrying...")
+    if greeting_made:
+        context.bot.send_photo(chat_id=update.effective_chat.id, photo=image)
+    else:
+        context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Sorry, something seems to have gone wrong.",
+        )
 
 
 def get_random_quote() -> str:
@@ -204,7 +230,7 @@ def adjust_line_breaks(
         not 0.5
         < text_dimensions_ratio(quote_font, greeting_font, quote_text, greeting_text)
         < 2
-    ):
+    ) and width > 1:
         width = width - 1
         quote_text = wrap_text(quote_font, quote, width)
         greeting_text = wrap_text(greeting_font, greeting, width)
@@ -316,11 +342,393 @@ def draw_text_on_image(
 
 
 # ---------------------------------------------------------------------------- #
+#                               Schedule command                               #
+# ---------------------------------------------------------------------------- #
+
+MESSAGE, INTERVAL, FIRST, LAST, CREATOR = range(5)
+
+
+def get_callback(message: str, chat_id: int) -> Callable[["CallbackContext"], None]:
+    """Get the callback for scheduled greetings.
+
+    Args:
+        message (str): Greeting message to be sent
+        chat_id (int): Chat to send the greeting to
+
+    Returns:
+        Callable: The callback to be passed to the job queue
+    """
+
+    def schedule_callback(context: CallbackContext):
+        """Send a Happy Birthday greeting to the channel.
+
+        Args:
+            context (CallbackContext): CallbackContext for the update
+        """
+        greeting_made = False
+        retries = 0
+        while not greeting_made and retries <= 3:
+            try:
+                quote = get_random_quote()
+                image = make_greeting(quote.strip(), message.strip())
+                greeting_made = True
+            except:
+                print("Oops! Something bad happened. Retrying...")
+                retries += 1
+        if greeting_made:
+            context.bot.send_photo(chat_id=chat_id, photo=image)
+        else:
+            print(f"Skipping scheduled message after {retries} retries.")
+
+    return schedule_callback
+
+
+def schedule(update: Update, context: CallbackContext) -> int:
+    """Schedule a greeting to be sent at regular intervals.
+
+    Args:
+        update (Update): Update from telegram
+        context (CallbackContext): CallbackContext for the update
+
+    Returns:
+        int: The next state in the conversation
+    """
+    user = update.message.from_user
+    logger.info(f"Got a schedule request from {user.last_name}, {user.first_name}")
+    update.message.reply_text(
+        "Hello Respected Sir/Madamji,\n\nHow are you? Myself GoodMorningBot from The Internet. Actually, "
+        + "I need a little more information to schedule your greeting. Kindly send *the "
+        + "greeting message* you'd like me to schedule. Hoping for a fast response.\n\n"
+        + "Thank you and regards,\nGoodMorningBot",
+        parse_mode="markdown",
+    )
+
+    return MESSAGE
+
+
+def schedule_message(update: Update, context: CallbackContext) -> int:
+    """Process the greeting message to be scheduled.
+
+    Args:
+        update (Update): Update from telegram
+        context (CallbackContext): CallbackContext for the update
+
+    Returns:
+        int: The next state in the conversation
+    """
+    context.user_data[MESSAGE] = update.message.text
+    update.message.reply_text(
+        "Hello Respected Sir/Madamji,\n\nThanks for sending me the greeting message. "
+        + "I also need *the interval (in seconds)* at which you want to send the above-mentioned "
+        + "greeting. Please type in that as well. Hoping for a quick reply.\n\n"
+        + "With warmest regards,\nGoodMorningBot",
+        parse_mode="markdown",
+    )
+
+    return INTERVAL
+
+
+def schedule_interval(update: Update, context: CallbackContext) -> int:
+    """Process the interval at which the message is to be scheduled.
+
+    Args:
+        update (Update): Update from telegram
+        context (CallbackContext): CallbackContext for the update
+
+    Returns:
+        int: The next state in the conversation
+    """
+    context.user_data[INTERVAL] = int(update.message.text)
+    update.message.reply_text(
+        "Hello Respected Sir/Madamji,\n\nThank you for sending the interval data. When should I start sending "
+        + "these greeting messages? Please give me *the start date and time in the yyyy-mm-dd HH:MM:SS format* "
+        + " and I will start sending it then. Or if you want me to start now itself, reply 'now'.\n\n"
+        + "With warmest regards,\nGoodMorningBot",
+        parse_mode="markdown",
+    )
+
+    return FIRST
+
+
+def schedule_first(update: Update, context: CallbackContext) -> int:
+    """Process the start datetime to schedule the message from.
+
+    Args:
+        update (Update): Update from telegram
+        context (CallbackContext): CallbackContext for the update
+
+    Returns:
+        int: The next state in the conversation
+    """
+    if update.message.text.lower() == "now":
+        date_object = None
+    else:
+        try:
+            date_object = datetime.strptime(update.message.text, "%Y-%m-%d %H:%M:%S")
+            date_object = date_object.replace(tzinfo=IST)
+            if date_object < datetime.now(IST):
+                update.message.reply_text(
+                    "Hello Respected Sir/Madamji,\n\nI am only a simple bot. I cannot do this time-travel stuffs. "
+                    + "So kindly give me a date and time in the future only. "
+                    + "Or if you want to schedule it immediately, reply 'now'. "
+                    + "Hoping for a fast (and correct) reply.\n\n"
+                    + "With fewer and fewer regards,\nGoodMorningBot",
+                    parse_mode="markdown",
+                )
+            return FIRST
+        except ValueError:
+            update.message.reply_text(
+                "Hello Respected Sir/Madamji,\n\nI _specifically_ mentioned one format no? Still why are you doing "
+                + "such stupid things. Please please please give me a date and time in the yyyy-mm-dd HH:MM:SS format only. "
+                + "Or if you want to schedule it immediately, reply 'now'. "
+                + "Hoping for a fast (and correct) reply.\n\n"
+                + "With fewer and fewer regards,\nGoodMorningBot",
+                parse_mode="markdown",
+            )
+            return FIRST
+    context.user_data[FIRST] = date_object
+    update.message.reply_text(
+        "Hello Respected Sir/Madamji,\n\nThank you for sending the start date. Please give me an *end date* also. "
+        + "Use the same yyyy-mm-dd HH:MM:SS format again. Or if you want it to keep going forever, reply 'never'.\n\n"
+        + "God bless,\nGoodMorningBot",
+        parse_mode="markdown",
+    )
+
+    return LAST
+
+
+def schedule_last(update: Update, context: CallbackContext) -> int:
+    """Process the end datetime to schedule the message till.
+
+    Args:
+        update (Update): Update from telegram
+        context (CallbackContext): CallbackContext for the update
+
+    Returns:
+        int: The next state in the conversation
+    """
+    if update.message.text.lower() == "never":
+        date_object = None
+    else:
+        try:
+            date_object = datetime.strptime(update.message.text, "%Y-%m-%d %H:%M:%S")
+            date_object = date_object.replace(tzinfo=IST)
+            if context.user_data[FIRST] is None and date_object < datetime.now(IST):
+                update.message.reply_text(
+                    "Hello Respected Sir/Madamji,\n\nI am only a simple bot. I cannot do this time-travel stuffs. "
+                    + "So kindly give me a date and time in the future only. "
+                    + "Or if you want it to repeat forever and ever and ever, reply 'never'. "
+                    + "Hoping for a fast (and correct) reply.\n\n"
+                    + "With fewer and fewer regards,\nGoodMorningBot",
+                    parse_mode="markdown",
+                )
+                return LAST
+            elif (
+                context.user_data[FIRST] is not None
+                and date_object < context.user_data[FIRST]
+            ):
+                update.message.reply_text(
+                    "Hello Respected Sir/Madamji,\n\nWhat is this stupidity you are attempting? "
+                    + "Kindly give me a date and time _after_ the start date. "
+                    + "Or if you want it to repeat forever and ever and ever, reply 'never'. "
+                    + "Hoping for a fast (and correct) reply.\n\n"
+                    + "With fewer and fewer regards,\nGoodMorningBot",
+                    parse_mode="markdown",
+                )
+                return LAST
+        except ValueError:
+            update.message.reply_text(
+                "Hello Respected Sir/Madamji,\n\nWhy are you doing this? Do you find some humour? If you don't want "
+                + "to schedule this greeting, then simply do /cancel and go. Please don't waste my RAM like this. Otherwise, "
+                + "give me a date and time in the yyyy-mm-dd HH:MM:SS format and let me do my job. Or if you want it to "
+                + "keep going on forever, reply 'never'. Praying for a quick and correct reply.\n\n"
+                + "Your obedient servant,\nGoodMorningBot",
+                parse_mode="markdown",
+            )
+            return LAST
+    context.user_data[LAST] = date_object
+    update.message.reply_text(
+        "Hello Respected Sir/Madamji,\n\nThank you kindly for sending all the details. I will send your "
+        + f"'{context.user_data[MESSAGE]}' greeting every {context.user_data[INTERVAL]} seconds starting "
+        + (
+            f"from {context.user_data[FIRST].strftime('%H:%M:%S on %d %b, %Y')} "
+            if context.user_data[FIRST] is not None
+            else "now "
+        )
+        + "until "
+        + (
+            f"{context.user_data[LAST].strftime('%H:%M:%S on %d %b, %Y')}."
+            if context.user_data[LAST] is not None
+            else "the end of time."
+        )
+        + "\n\n"
+        + "At your service,\nGoodMorningBot",
+        parse_mode="markdown",
+    )
+    context.job_queue.run_repeating(
+        callback=get_callback(context.user_data[MESSAGE], update.effective_chat.id),
+        interval=context.user_data[INTERVAL],
+        first=context.user_data[FIRST],
+        last=context.user_data[LAST],
+        context={
+            CREATOR: update.message.from_user.full_name,
+            MESSAGE: context.user_data[MESSAGE],
+            INTERVAL: context.user_data[INTERVAL],
+            FIRST: context.user_data[FIRST]
+            if context.user_data[FIRST] is not None
+            else datetime.now(IST),
+            LAST: context.user_data[LAST],
+        },
+        name=f"{update.effective_chat.id}_{time.time()}",
+    )
+
+    return ConversationHandler.END
+
+
+def schedule_cancel(update: Update, context: CallbackContext) -> int:
+    """Cancel the schedule request.
+
+    Args:
+        update (Update): Update from telegram
+        context (CallbackContext): CallbackContext for the update
+
+    Returns:
+        int: The next state in the conversation (end).
+    """
+    user = update.message.from_user
+    logger.info(f"User {user.last_name}, {user.first_name} canceled the conversation.")
+    update.message.reply_text(
+        "Hello Respected Sir/Madamji,\n\nI am hereby canceling your request to schedul a greeting. "
+        + "Hoping to be at your service sometime in the near future.\n\nYours programmatically, GoodMorningBot",
+    )
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+def get_scheduled_messages(update: Update, context: CallbackContext):
+    """Get all the scheduled messages in the current chat.
+
+    Args:
+        update (Update): Update from telegram
+        context (CallbackContext): CallbackContext for the update
+
+    Returns:
+        int: The next state in the conversation.
+    """
+    jobs = [
+        job
+        for job in job_queue.jobs()
+        if job.name.startswith(str(update.effective_chat.id))
+    ]
+    if len(jobs) > 0:
+        update.message.reply_text(
+            "Hello Respected Sir/Madamji,\n\nPlease find the list of greetings that have been scheduled "
+            + "in this chat below.\n\nThanks and regards,\nGoodMorningBot"
+        )
+        for job in jobs:
+            message = f"Schedule ID: {job.name}\n"
+            message += f"Created by: {job.context[CREATOR]}\n"
+            message += f"Greeting: {job.context[MESSAGE]}\n"
+            message += f"Interval: {job.context[INTERVAL]}\n"
+            message += f"Start: {job.context[FIRST]}\n"
+            message += f"End: {job.context[LAST] if job.context[LAST] is not None else 'The end of time'}\n\n"
+            message += "_Reply to this with *'cancel'* in the next 15 seconds to cancel this schedule._"
+            context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=message,
+                parse_mode="markdown",
+            )
+        return 1
+    else:
+        update.message.reply_text(
+            "Hello Respected Sir/Madamji,\n\nSorry to inform you that there "
+            + "are no scheduled greetings here in this chat.\n\nWith best regards,\nGoodMorningBot"
+        )
+        return ConversationHandler.END
+
+
+def handle_schedule_cancel(update: Update, context: CallbackContext) -> int:
+    """Cancel a scheduled greeting.
+
+    Args:
+        update (Update): Update from telegram
+        context (CallbackContext): CallbackContext for the update
+
+    Returns:
+        int: The next state in the conversation (end).
+    """
+    message = update.message.reply_to_message
+    job_name = re.search("^Schedule ID: ([^\s]+)\s", message.text).group(1)
+    print(f"Cancelling job: {job_name}")
+    job_queue.get_jobs_by_name(job_name)[0].schedule_removal()
+    update.message.reply_text(
+        "Hello Respected Sir/Madamji,\n\nAs requested by yourself, I have cancelled "
+        + "that scheduled greeting.\n\nThanks and regards,\nGoodMorningBot"
+    )
+    return ConversationHandler.END
+
+
+# ---------------------------------------------------------------------------- #
 #                               Bot handler setup                              #
 # ---------------------------------------------------------------------------- #
 
 greet_command_handler = CommandHandler("greet", greet, run_async=True)
+get_schedule_command_handler = ConversationHandler(
+    entry_points=[CommandHandler("list", get_scheduled_messages)],
+    states={},
+    fallbacks=[
+        MessageHandler(
+            Filters.regex(re.compile(r"^cancel$", re.IGNORECASE)),
+            handle_schedule_cancel,
+        )
+    ],
+    conversation_timeout=15,
+)
+
+schedule_command_handler = ConversationHandler(
+    entry_points=[CommandHandler("schedule", schedule)],
+    states={
+        MESSAGE: [
+            MessageHandler(
+                Filters.text & ~Filters.command,
+                schedule_message,
+            ),
+        ],
+        INTERVAL: [
+            MessageHandler(
+                Filters.regex("^[0-9]+$"),
+                schedule_interval,
+            )
+        ],
+        FIRST: [
+            MessageHandler(
+                Filters.regex(
+                    re.compile(
+                        r"^((now)|(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}))$",
+                        re.IGNORECASE,
+                    )
+                ),
+                schedule_first,
+            )
+        ],
+        LAST: [
+            MessageHandler(
+                Filters.regex(
+                    re.compile(
+                        r"^((never)|(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}))",
+                        re.IGNORECASE,
+                    )
+                ),
+                schedule_last,
+            )
+        ],
+    },
+    fallbacks=[CommandHandler("cancel", schedule_cancel)],
+)
+
 dispatcher.add_handler(greet_command_handler)
+dispatcher.add_handler(get_schedule_command_handler)
+dispatcher.add_handler(schedule_command_handler)
 
 # ---------------------------------------------------------------------------- #
 #                              Bot start and stop                              #
