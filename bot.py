@@ -743,7 +743,7 @@ schedule_command_handler = ConversationHandler(
             MessageHandler(
                 Filters.regex(
                     re.compile(
-                        r"^((now)|(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}))$",
+                        r"^((now)|(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}))",
                         re.IGNORECASE,
                     )
                 ),
