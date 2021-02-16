@@ -476,7 +476,7 @@ def schedule_first(update: Update, context: CallbackContext) -> int:
                     + "With fewer and fewer regards,\nGoodMorningBot",
                     parse_mode="markdown",
                 )
-            return FIRST
+                return FIRST
         except ValueError:
             update.message.reply_text(
                 "Hello Respected Sir/Madamji,\n\nI _specifically_ mentioned one format no? Still why are you doing "
@@ -743,7 +743,7 @@ schedule_command_handler = ConversationHandler(
             MessageHandler(
                 Filters.regex(
                     re.compile(
-                        r"^((now)|(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}))",
+                        r"^((now)|(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}))$",
                         re.IGNORECASE,
                     )
                 ),
@@ -754,7 +754,7 @@ schedule_command_handler = ConversationHandler(
             MessageHandler(
                 Filters.regex(
                     re.compile(
-                        r"^((never)|(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}))",
+                        r"^((never)|(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}))$",
                         re.IGNORECASE,
                     )
                 ),
